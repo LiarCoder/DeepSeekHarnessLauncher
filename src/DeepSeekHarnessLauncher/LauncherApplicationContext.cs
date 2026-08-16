@@ -53,7 +53,7 @@ namespace DeepSeekHarnessLauncher
             trayIcon = new NotifyIcon
             {
                 ContextMenuStrip = menu,
-                Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application,
+                Icon = LoadTrayIcon(),
                 Text = "DeepSeek Harness Launcher",
                 Visible = true
             };
@@ -71,6 +71,23 @@ namespace DeepSeekHarnessLauncher
 
             Application.Idle += OnFirstIdle;
             logger.Info("启动器已启动");
+        }
+
+        private static Icon LoadTrayIcon()
+        {
+            const string resourceName = "DeepSeekHarnessLauncher.Assets.dsh-tray-icon.ico";
+            using (var stream = typeof(LauncherApplicationContext).Assembly.GetManifestResourceStream(resourceName))
+            {
+                if (stream == null)
+                {
+                    return Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+                }
+
+                using (var icon = new Icon(stream, SystemInformation.SmallIconSize))
+                {
+                    return (Icon)icon.Clone();
+                }
+            }
         }
 
         private async void OnFirstIdle(object sender, EventArgs eventArgs)

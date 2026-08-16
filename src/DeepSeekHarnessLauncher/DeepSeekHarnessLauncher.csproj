@@ -35,6 +35,8 @@
   <ItemGroup>
     <Content Include="Assets\dsh-logo-transparent.png" />
     <Content Include="Assets\dsh-logo.ico" />
+    <Content Include="Assets\dsh-tray-icon.png" />
+    <EmbeddedResource Include="Assets\dsh-tray-icon.ico" />
   </ItemGroup>
   <ItemGroup>
     <Reference Include="System.Runtime.Serialization" />
