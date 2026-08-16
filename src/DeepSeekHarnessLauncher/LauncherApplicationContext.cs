@@ -171,6 +171,12 @@ namespace DeepSeekHarnessLauncher
 
             try
             {
+                if (BrowserTabActivator.TryActivate(harness.WebUiUri))
+                {
+                    logger.Info("已切换到现有 Web UI 标签页");
+                    return;
+                }
+
                 Process.Start(new ProcessStartInfo(harness.WebUiUri.AbsoluteUri) { UseShellExecute = true });
             }
             catch (Exception exception)
