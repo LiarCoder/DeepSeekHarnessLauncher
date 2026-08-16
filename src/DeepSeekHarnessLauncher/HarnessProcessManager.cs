@@ -20,6 +20,17 @@ namespace DeepSeekHarnessLauncher
 
         public Uri WebUiUri { get; private set; }
 
+        public int ProcessId
+        {
+            get
+            {
+                lock (syncRoot)
+                {
+                    return process != null && !process.HasExited ? process.Id : 0;
+                }
+            }
+        }
+
         public bool IsRunning
         {
             get

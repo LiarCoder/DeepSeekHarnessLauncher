@@ -32,13 +32,18 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
+    <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="AppPaths.cs" />
+    <Compile Include="FileLogger.cs" />
     <Compile Include="HarnessProcessManager.cs" />
+    <Compile Include="LauncherStateStore.cs" />
     <Compile Include="LauncherApplicationContext.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
