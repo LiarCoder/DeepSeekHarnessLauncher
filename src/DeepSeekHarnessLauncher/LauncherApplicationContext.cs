@@ -53,7 +53,7 @@ namespace DeepSeekHarnessLauncher
             trayIcon = new NotifyIcon
             {
                 ContextMenuStrip = menu,
-                Icon = SystemIcons.Application,
+                Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application,
                 Text = "DeepSeek Harness Launcher",
                 Visible = true
             };
