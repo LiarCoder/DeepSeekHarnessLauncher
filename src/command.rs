@@ -95,12 +95,12 @@ pub fn run_capture(
             Ok(Some(status)) => break status,
             Ok(None) if started_at.elapsed() < timeout => thread::sleep(Duration::from_millis(50)),
             Ok(None) => {
-                let _ = child.kill();
+                taskkill(child.id());
                 let _ = child.wait();
                 return Err(format!("命令执行超时：{}", command.path.display()));
             }
             Err(error) => {
-                let _ = child.kill();
+                taskkill(child.id());
                 let _ = child.wait();
                 return Err(format!("等待命令结束失败：{error}"));
             }
