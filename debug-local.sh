@@ -6,8 +6,8 @@ repo_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 binary="$repo_dir/target/debug/deepseek-harness-launcher.exe"
 
 echo "Stopping running launcher instances..."
-taskkill.exe /F /T /IM deepseek-harness-launcher.exe >/dev/null 2>&1 || true
-taskkill.exe /F /T /IM DeepSeekHarnessLauncher.exe >/dev/null 2>&1 || true
+MSYS_NO_PATHCONV=1 taskkill.exe /F /T /IM deepseek-harness-launcher.exe >/dev/null 2>&1 || true
+MSYS_NO_PATHCONV=1 taskkill.exe /F /T /IM DeepSeekHarnessLauncher.exe >/dev/null 2>&1 || true
 
 echo "Building latest debug binary..."
 cargo build --manifest-path "$repo_dir/Cargo.toml"
