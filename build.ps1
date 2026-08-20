@@ -4,20 +4,37 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-if (-not (Test-Path -LiteralPath $vswhere)) {
-    throw '未找到 Visual Studio Installer，请安装 Visual Studio 2022 Build Tools'
+$cargo = Get-Command cargo -ErrorAction SilentlyContinue
+if (-not $cargo) {
+    throw '未找到 cargo，请安装 Rust 工具链'
 }
 
-$msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find 'MSBuild\**\Bin\MSBuild.exe' |
-    Select-Object -First 1
-if (-not $msbuild) {
-    throw '未找到 MSBuild，请安装 Visual Studio 2022 Build Tools'
+$arguments = @('build')
+if ($Configuration -eq 'Release') {
+    $arguments += '--release'
 }
 
-& $msbuild "$PSScriptRoot\DeepSeekHarnessLauncher.sln" /restore /t:Build "/p:Configuration=$Configuration" /v:minimal
+Push-Location $PSScriptRoot
+try {
+    & $cargo.Source @arguments
+}
+finally {
+    Pop-Location
+}
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-Write-Output "输出文件：$PSScriptRoot\src\DeepSeekHarnessLauncher\bin\$Configuration\DeepSeekHarnessLauncher.exe"
+$outputDirectory = if ($Configuration -eq 'Release') { 'release' } else { 'debug' }
+$output = Join-Path $PSScriptRoot "target\$outputDirectory\deepseek-harness-launcher.exe"
+$limit = 5MB
+if (-not (Test-Path -LiteralPath $output)) {
+    throw "未找到构建产物：$output"
+}
+$size = (Get-Item -LiteralPath $output).Length
+if ($size -gt $limit) {
+    throw "构建产物超过 5 MB：$size bytes"
+}
+
+Write-Output "输出文件：$output"
+Write-Output "文件大小：$size bytes"
