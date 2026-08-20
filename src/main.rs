@@ -12,14 +12,17 @@ mod single_instance;
 mod state;
 
 fn main() {
-    let Ok(Some(single_instance)) = single_instance::SingleInstance::acquire() else {
-        return;
+    let single_instance = match single_instance::SingleInstance::acquire() {
+        Ok(Some(single_instance)) => single_instance,
+        Ok(None) => return,
+        Err(error) => {
+            app::show_fatal_error(&error);
+            return;
+        }
     };
 
     match app::App::new(single_instance).and_then(app::App::run) {
         Ok(()) => {}
-        Err(error) => {
-            eprintln!("DeepSeek Harness Launcher 启动失败：{error}");
-        }
+        Err(error) => app::show_fatal_error(&error),
     }
 }

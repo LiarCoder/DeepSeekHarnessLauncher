@@ -82,6 +82,13 @@ pub struct App {
     version_label: String,
 }
 
+pub fn show_fatal_error(error: &str) {
+    message_box(
+        &format!("DeepSeek Harness Launcher 启动失败：\r\n\r\n{error}"),
+        MB_OK | MB_ICONERROR,
+    );
+}
+
 impl App {
     pub fn new(single_instance: SingleInstance) -> Result<Self, String> {
         let logger = Arc::new(Logger::new()?);

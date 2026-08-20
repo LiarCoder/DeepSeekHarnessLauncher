@@ -74,7 +74,7 @@ impl HarnessProcessManager {
 
         spawn_output_reader(child.stdout.take(), self.events.clone());
         spawn_output_reader(child.stderr.take(), self.events.clone());
-        self.spawn_exit_monitor(child);
+        self.spawn_exit_monitor(child, process_id);
 
         let started_at = Instant::now();
         while started_at.elapsed() < timeout {
@@ -128,20 +128,24 @@ impl HarnessProcessManager {
         self.state.lock().ok()?.web_ui_url.clone()
     }
 
-    fn spawn_exit_monitor(&self, mut child: std::process::Child) {
+    fn spawn_exit_monitor(&self, mut child: std::process::Child, monitored_process_id: u32) {
         let state = Arc::clone(&self.state);
         let running = Arc::clone(&self.running);
         let events = self.events.clone();
         thread::spawn(move || {
             let _ = child.wait();
-            running.store(false, Ordering::SeqCst);
             let unexpectedly_exited = if let Ok(mut state) = state.lock() {
-                let unexpectedly_exited = !state.stopping && state.ready;
-                state.running = false;
-                state.ready = false;
-                state.process_id = None;
-                state.web_ui_url = None;
-                unexpectedly_exited
+                if state.process_id != Some(monitored_process_id) {
+                    false
+                } else {
+                    running.store(false, Ordering::SeqCst);
+                    let unexpectedly_exited = !state.stopping && state.ready;
+                    state.running = false;
+                    state.ready = false;
+                    state.process_id = None;
+                    state.web_ui_url = None;
+                    unexpectedly_exited
+                }
             } else {
                 false
             };
