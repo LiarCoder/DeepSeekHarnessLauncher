@@ -48,6 +48,12 @@ cargo build --release
 
 发布文件位于 `target\release\deepseek-harness-launcher.exe`，默认使用体积优化和静态 MSVC CRT，发布构建会检查单文件体积上限
 
+本地修改代码后，可在 Git Bash 中运行以下脚本。它会关闭当前启动器及其 Harness 子进程，构建最新 Debug 产物，然后重新启动应用：
+
+```bash
+./debug-local.sh
+```
+
 ## 运行时目录
 
 - 日志：`%USERPROFILE%\.dsh\dsh-launcher\logs`
