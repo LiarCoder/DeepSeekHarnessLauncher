@@ -8,6 +8,7 @@
     <RootNamespace>DeepSeekHarnessLauncher</RootNamespace>
     <AssemblyName>DeepSeekHarnessLauncher</AssemblyName>
     <ApplicationIcon>Assets\dsh-logo.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <LangVersion>7.3</LangVersion>
     <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
@@ -31,6 +32,10 @@
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3">
       <PrivateAssets>All</PrivateAssets>
     </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="App.config" />
+    <None Include="app.manifest" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Assets\dsh-logo-transparent.png" />
