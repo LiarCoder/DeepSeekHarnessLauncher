@@ -50,7 +50,8 @@ pub fn build_command(command: &ResolvedCommand, args: &[String]) -> Command {
     let mut process = if command.is_shell_script() {
         let command_line = build_shell_command_line(&command.path, args);
         let mut process = Command::new(comspec());
-        process.args(["/D", "/S", "/C", &command_line]);
+        process.args(["/D", "/S", "/C"]);
+        process.raw_arg(command_line);
         process
     } else {
         let mut process = Command::new(&command.path);
@@ -179,7 +180,9 @@ fn quote_shell_argument(argument: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{command_candidates, quote_shell_argument};
+    use super::{command_candidates, quote_shell_argument, run_capture, ResolvedCommand};
+    use std::fs;
+    use std::time::Duration;
 
     #[test]
     fn command_candidates_prefer_windows_launchers() {
@@ -193,5 +196,26 @@ mod tests {
     fn shell_arguments_are_quoted_when_needed() {
         assert_eq!(quote_shell_argument("plain"), "plain");
         assert_eq!(quote_shell_argument("with space"), "\"with space\"");
+    }
+
+    #[test]
+    fn shell_script_runs_from_quoted_path() {
+        let directory = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(".codex-tmp")
+            .join(format!("command test {}", std::process::id()));
+        fs::create_dir_all(&directory).expect("create test directory");
+        let script = directory.join("version probe.cmd");
+        fs::write(&script, "@echo off\r\necho 1.2.3\r\n").expect("write test script");
+
+        let output = run_capture(
+            &ResolvedCommand::new(script),
+            &["--version".to_owned()],
+            Duration::from_secs(5),
+        )
+        .expect("run test script");
+        let _ = fs::remove_dir_all(directory);
+
+        assert!(output.status.success(), "{}", output.stderr);
+        assert_eq!(output.stdout.trim(), "1.2.3");
     }
 }
