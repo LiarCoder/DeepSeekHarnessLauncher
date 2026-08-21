@@ -54,7 +54,7 @@ impl HarnessProcessManager {
         }
 
         let port = find_available_port()?;
-        let args = vec!["web".to_owned(), "--port".to_owned(), port.to_string()];
+        let args = web_command_args(port);
         let installation = dsh::locate_installation()?;
         let (dsh_command, command_args) = dsh::command_for(&installation, &args);
         let mut child = build_command(dsh_command, &command_args)
@@ -238,6 +238,15 @@ fn summarize_startup_error(output: &[String]) -> Option<String> {
     })
 }
 
+fn web_command_args(port: u16) -> Vec<String> {
+    vec![
+        "web".to_owned(),
+        "--no-open".to_owned(),
+        "--port".to_owned(),
+        port.to_string(),
+    ]
+}
+
 fn truncate_detail(detail: &str, max_chars: usize) -> String {
     let mut chars = detail.chars();
     let truncated: String = chars.by_ref().take(max_chars).collect();
@@ -266,7 +275,20 @@ fn can_bind(port: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::summarize_startup_error;
+    use super::{summarize_startup_error, web_command_args};
+
+    #[test]
+    fn disables_dsh_browser_opening_for_web_start() {
+        assert_eq!(
+            web_command_args(3080),
+            vec![
+                "web".to_owned(),
+                "--no-open".to_owned(),
+                "--port".to_owned(),
+                "3080".to_owned(),
+            ]
+        );
+    }
 
     #[test]
     fn summarizes_the_useful_error_without_the_stack_trace() {
