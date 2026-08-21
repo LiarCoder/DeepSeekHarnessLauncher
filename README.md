@@ -62,4 +62,4 @@ cargo build --release
 
 ## 发布
 
-推送 `v*` 标签后，GitHub Actions 会在 Windows runner 上执行测试、构建并创建 GitHub Release，Release 中只上传 `DeepSeekHarnessLauncher.exe`
+推送 `v*` 标签后，GitHub Actions 会在 Windows runner 上执行测试、构建并创建 GitHub Release，Release 中只上传 `deepseek-harness-launcher.exe`

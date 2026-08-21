@@ -11,9 +11,10 @@ use windows::Win32::Networking::WinHttp::{
 const REGISTRY_HOST: &str = "registry.npmjs.org";
 const REGISTRY_PATH: &str = "/@deepseek-ai%2Fdsh/latest";
 const GITHUB_API_HOST: &str = "api.github.com";
-const GITHUB_LATEST_RELEASE_PATH: &str = "/repos/LiarCoder/DeepSeekHarnessLauncher/releases/latest";
+const GITHUB_LATEST_RELEASE_PATH: &str =
+    "/repos/LiarCoder/deepseek-harness-launcher/releases/latest";
 const GITHUB_RELEASE_ASSET_PREFIX: &str =
-    "https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/download/";
+    "https://github.com/LiarCoder/deepseek-harness-launcher/releases/download/";
 const LAUNCHER_ASSET_NAME: &str = "deepseek-harness-launcher.exe";
 
 #[derive(Deserialize)]
@@ -91,7 +92,7 @@ fn parse_latest_launcher_release(body: &[u8]) -> Result<LauncherRelease, String>
 pub fn download_launcher_asset(asset_url: &str) -> Result<Vec<u8>, String> {
     let (host, path) = split_https_url(asset_url)?;
     if !host.eq_ignore_ascii_case("github.com")
-        || !path.starts_with("/LiarCoder/DeepSeekHarnessLauncher/releases/download/")
+        || !path.starts_with("/LiarCoder/deepseek-harness-launcher/releases/download/")
     {
         return Err("GitHub Release Launcher 安装包地址无效".to_owned());
     }
@@ -120,7 +121,7 @@ fn split_https_url(url: &str) -> Result<(&str, &str), String> {
 
 fn get(host: &str, path: &str) -> Result<Vec<u8>, String> {
     let agent = wide(&format!(
-        "DeepSeekHarnessLauncher/{}",
+        "deepseek-harness-launcher/{}",
         env!("CARGO_PKG_VERSION")
     ));
     let host = wide(host);
@@ -238,25 +239,25 @@ mod tests {
     #[test]
     fn parses_github_latest_launcher_release() {
         let release = parse_latest_launcher_release(
-            br#"{"tag_name":"v0.3.0","html_url":"https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/tag/v0.3.0","assets":[{"name":"deepseek-harness-launcher.exe","browser_download_url":"https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/download/v0.3.0/deepseek-harness-launcher.exe"}]}"#,
+            br#"{"tag_name":"v0.3.0","html_url":"https://github.com/LiarCoder/deepseek-harness-launcher/releases/tag/v0.3.0","assets":[{"name":"deepseek-harness-launcher.exe","browser_download_url":"https://github.com/LiarCoder/deepseek-harness-launcher/releases/download/v0.3.0/deepseek-harness-launcher.exe"}]}"#,
         )
         .expect("parse release");
 
         assert_eq!(release.version, "v0.3.0");
         assert_eq!(
             release.page_url,
-            "https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/tag/v0.3.0"
+            "https://github.com/LiarCoder/deepseek-harness-launcher/releases/tag/v0.3.0"
         );
         assert_eq!(
             release.asset_url,
-            "https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/download/v0.3.0/deepseek-harness-launcher.exe"
+            "https://github.com/LiarCoder/deepseek-harness-launcher/releases/download/v0.3.0/deepseek-harness-launcher.exe"
         );
     }
 
     #[test]
     fn rejects_release_without_version() {
         let result = parse_latest_launcher_release(
-            br#"{"tag_name":"  ","html_url":"https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/latest"}"#,
+            br#"{"tag_name":"  ","html_url":"https://github.com/LiarCoder/deepseek-harness-launcher/releases/latest"}"#,
         );
 
         assert_eq!(
@@ -268,7 +269,7 @@ mod tests {
     #[test]
     fn rejects_release_without_launcher_asset() {
         let result = parse_latest_launcher_release(
-            br#"{"tag_name":"v0.3.0","html_url":"https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/tag/v0.3.0","assets":[]}"#,
+            br#"{"tag_name":"v0.3.0","html_url":"https://github.com/LiarCoder/deepseek-harness-launcher/releases/tag/v0.3.0","assets":[]}"#,
         );
 
         assert_eq!(
@@ -281,12 +282,12 @@ mod tests {
     fn splits_https_asset_url() {
         assert_eq!(
             split_https_url(
-                "https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/download/v0.3.0/deepseek-harness-launcher.exe"
+                "https://github.com/LiarCoder/deepseek-harness-launcher/releases/download/v0.3.0/deepseek-harness-launcher.exe"
             )
             .expect("split URL"),
             (
                 "github.com",
-                "/LiarCoder/DeepSeekHarnessLauncher/releases/download/v0.3.0/deepseek-harness-launcher.exe"
+                "/LiarCoder/deepseek-harness-launcher/releases/download/v0.3.0/deepseek-harness-launcher.exe"
             )
         );
     }

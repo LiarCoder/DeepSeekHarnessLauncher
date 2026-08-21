@@ -6,8 +6,8 @@ use windows::Win32::System::Threading::{
     CreateEventW, CreateMutexW, SetEvent, WaitForSingleObject,
 };
 
-const MUTEX_NAME: windows::core::PCWSTR = w!("Local\\DeepSeekHarnessLauncher.SingleInstance");
-const SIGNAL_NAME: windows::core::PCWSTR = w!("Local\\DeepSeekHarnessLauncher.OpenWebUi");
+const MUTEX_NAME: windows::core::PCWSTR = w!("Local\\deepseek-harness-launcher.SingleInstance");
+const SIGNAL_NAME: windows::core::PCWSTR = w!("Local\\deepseek-harness-launcher.OpenWebUi");
 
 pub struct SingleInstance {
     mutex: HANDLE,

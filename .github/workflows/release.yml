@@ -49,7 +49,7 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: DeepSeekHarnessLauncher-windows-x64
+          name: deepseek-harness-launcher-windows-x64
           path: dist/deepseek-harness-launcher.exe
 
       - name: 创建 GitHub Release
