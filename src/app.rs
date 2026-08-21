@@ -34,8 +34,9 @@ const TIMER_ID: usize = 1;
 const COMMAND_OPEN: usize = 1001;
 const COMMAND_RESTART: usize = 1002;
 const COMMAND_LOG: usize = 1003;
-const COMMAND_UPDATE: usize = 1004;
-const COMMAND_EXIT: usize = 1005;
+const COMMAND_DSH_UPDATE: usize = 1004;
+const COMMAND_LAUNCHER_UPDATE: usize = 1005;
+const COMMAND_EXIT: usize = 1006;
 
 enum WorkerEvent {
     StartFinished {
@@ -43,11 +44,12 @@ enum WorkerEvent {
         open_browser: bool,
     },
     VersionFinished(Result<VersionInfo, String>),
-    UpdateCheckFinished(Result<UpdateInfo, String>),
-    UpdateInstalled {
+    DshUpdateCheckFinished(Result<DshUpdateInfo, String>),
+    DshUpdateInstalled {
         result: Result<String, String>,
         latest_version: String,
     },
+    LauncherUpdateCheckFinished(Result<LauncherUpdateInfo, String>),
     RestartStopped {
         open_browser: bool,
     },
@@ -59,10 +61,16 @@ struct VersionInfo {
     manager_name: &'static str,
 }
 
-struct UpdateInfo {
+struct DshUpdateInfo {
     installed_version: String,
     latest_version: String,
     manager: PackageManager,
+}
+
+struct LauncherUpdateInfo {
+    installed_version: String,
+    latest_version: String,
+    release_url: String,
 }
 
 pub struct App {
@@ -79,7 +87,8 @@ pub struct App {
     automatic_restart_used: bool,
     exiting: bool,
     initial_started: bool,
-    version_label: String,
+    dsh_version_label: String,
+    launcher_version_label: String,
 }
 
 pub fn show_fatal_error(error: &str) {
@@ -111,7 +120,8 @@ impl App {
             automatic_restart_used: false,
             exiting: false,
             initial_started: false,
-            version_label: "版本未知 - 检查更新".to_owned(),
+            dsh_version_label: unknown_version_label("dsh"),
+            launcher_version_label: version_label("Launcher", env!("CARGO_PKG_VERSION")),
         })
     }
 
@@ -210,11 +220,16 @@ impl App {
                 open_browser,
             } => self.handle_start_finished(result, open_browser),
             WorkerEvent::VersionFinished(result) => self.handle_version_finished(result),
-            WorkerEvent::UpdateCheckFinished(result) => self.handle_update_check_finished(result),
-            WorkerEvent::UpdateInstalled {
+            WorkerEvent::DshUpdateCheckFinished(result) => {
+                self.handle_dsh_update_check_finished(result)
+            }
+            WorkerEvent::DshUpdateInstalled {
                 result,
                 latest_version,
-            } => self.handle_update_installed(result, &latest_version),
+            } => self.handle_dsh_update_installed(result, &latest_version),
+            WorkerEvent::LauncherUpdateCheckFinished(result) => {
+                self.handle_launcher_update_check_finished(result)
+            }
             WorkerEvent::RestartStopped { open_browser } => {
                 if self.exiting {
                     state::clear();
@@ -323,7 +338,7 @@ impl App {
         thread::spawn(move || {
             let result = (|| {
                 let installation = dsh::locate_installation()?;
-                let version = dsh::version(&installation.dsh)?;
+                let version = dsh::version(&installation)?;
                 Ok(VersionInfo {
                     version,
                     manager_name: installation.manager.display_name(),
@@ -338,16 +353,16 @@ impl App {
 
     fn handle_version_finished(&mut self, result: Result<VersionInfo, String>) {
         match result {
-            Ok(info) => self.version_label = version_label(&info.version),
+            Ok(info) => self.dsh_version_label = version_label("dsh", &info.version),
             Err(error) => {
                 self.logger
                     .error(format!("读取 DeepSeek Harness 版本失败：{error}"));
-                self.version_label = "版本未知 - 检查更新".to_owned();
+                self.dsh_version_label = unknown_version_label("dsh");
             }
         }
     }
 
-    fn begin_update_check(&mut self) {
+    fn begin_dsh_update_check(&mut self) {
         if self.operation_in_progress || self.exiting {
             return;
         }
@@ -357,19 +372,19 @@ impl App {
         thread::spawn(move || {
             let result = (|| {
                 let installation: DshInstallation = dsh::locate_installation()?;
-                let installed_version = dsh::version(&installation.dsh)?;
+                let installed_version = dsh::version(&installation)?;
                 let latest_version = registry::latest_version()?;
-                Ok(UpdateInfo {
+                Ok(DshUpdateInfo {
                     installed_version,
                     latest_version,
                     manager: installation.manager,
                 })
             })();
-            let _ = sender.send(WorkerEvent::UpdateCheckFinished(result));
+            let _ = sender.send(WorkerEvent::DshUpdateCheckFinished(result));
         });
     }
 
-    fn handle_update_check_finished(&mut self, result: Result<UpdateInfo, String>) {
+    fn handle_dsh_update_check_finished(&mut self, result: Result<DshUpdateInfo, String>) {
         let info = match result {
             Ok(info) => info,
             Err(error) => {
@@ -384,7 +399,7 @@ impl App {
             }
         };
 
-        self.version_label = version_label(&info.installed_version);
+        self.dsh_version_label = version_label("dsh", &info.installed_version);
         if versions_equal(&info.installed_version, &info.latest_version) {
             self.operation_in_progress = false;
             message_box(
@@ -406,13 +421,15 @@ impl App {
             MB_YESNO | MB_ICONQUESTION,
         );
         if answer == IDYES {
-            self.begin_install(info);
+            self.begin_dsh_install(info);
         } else {
             self.operation_in_progress = false;
         }
     }
 
-    fn begin_install(&mut self, info: UpdateInfo) {
+    fn begin_dsh_install(&mut self, info: DshUpdateInfo) {
+        self.logger.info("正在停止 DeepSeek Harness 以安装更新");
+        let harness = Arc::clone(&self.harness);
         self.logger.info(format!(
             "使用 {} 更新 DeepSeek Harness",
             info.manager.display_name()
@@ -421,23 +438,29 @@ impl App {
         let logger = Arc::clone(&self.logger);
         let latest_version = info.latest_version.clone();
         thread::spawn(move || {
+            harness.stop();
+            state::clear();
             let result = info.manager.run_update(Duration::from_secs(300));
             if let Ok(output) = &result {
                 if !output.is_empty() {
                     logger.info(output);
                 }
             }
-            let _ = sender.send(WorkerEvent::UpdateInstalled {
+            let _ = sender.send(WorkerEvent::DshUpdateInstalled {
                 result,
                 latest_version,
             });
         });
     }
 
-    fn handle_update_installed(&mut self, result: Result<String, String>, latest_version: &str) {
+    fn handle_dsh_update_installed(
+        &mut self,
+        result: Result<String, String>,
+        latest_version: &str,
+    ) {
         match result {
             Ok(_) => {
-                self.version_label = version_label(latest_version);
+                self.dsh_version_label = version_label("dsh", latest_version);
                 self.operation_in_progress = false;
                 message_box(
                     &format!(
@@ -446,17 +469,92 @@ impl App {
                     ),
                     MB_OK | MB_ICONINFORMATION,
                 );
-                self.begin_restart(true);
+                self.begin_start(true, true);
             }
             Err(error) => {
                 self.operation_in_progress = false;
                 self.logger
                     .error(format!("安装 DeepSeek Harness 更新失败：{error}"));
                 message_box(
-                    &format!("检查或安装更新失败，当前 Harness 将继续运行：\r\n\r\n{error}"),
+                    &format!("检查或安装更新失败，正在尝试重新启动 Harness：\r\n\r\n{error}"),
                     MB_OK | MB_ICONERROR,
                 );
+                self.begin_start(true, true);
             }
+        }
+    }
+
+    fn begin_launcher_update_check(&mut self) {
+        if self.operation_in_progress || self.exiting {
+            return;
+        }
+        self.operation_in_progress = true;
+        self.logger.info("正在检查 Launcher 更新");
+        let sender = self.worker_sender.clone();
+        thread::spawn(move || {
+            let result = (|| {
+                let release = registry::latest_launcher_release()?;
+                Ok(LauncherUpdateInfo {
+                    installed_version: env!("CARGO_PKG_VERSION").to_owned(),
+                    latest_version: release.version,
+                    release_url: release.page_url,
+                })
+            })();
+            let _ = sender.send(WorkerEvent::LauncherUpdateCheckFinished(result));
+        });
+    }
+
+    fn handle_launcher_update_check_finished(
+        &mut self,
+        result: Result<LauncherUpdateInfo, String>,
+    ) {
+        let info = match result {
+            Ok(info) => info,
+            Err(error) => {
+                self.operation_in_progress = false;
+                self.logger
+                    .error(format!("检查 Launcher 更新失败：{error}"));
+                message_box(
+                    &format!("检查 Launcher 更新失败：\r\n\r\n{error}"),
+                    MB_OK | MB_ICONERROR,
+                );
+                return;
+            }
+        };
+
+        self.launcher_version_label = version_label("Launcher", &info.installed_version);
+        if versions_equal(&info.installed_version, &info.latest_version) {
+            self.operation_in_progress = false;
+            message_box(
+                &format!(
+                    "当前 Launcher 已是最新版（v{}）。",
+                    trim_version(&info.installed_version)
+                ),
+                MB_OK | MB_ICONINFORMATION,
+            );
+            return;
+        }
+
+        let answer = message_box_result(
+            &format!(
+                "发现 Launcher 新版本：\r\n\r\n当前版本：v{}\r\n最新版本：v{}\r\n\r\n是否打开 GitHub Release 下载页面？",
+                trim_version(&info.installed_version),
+                trim_version(&info.latest_version)
+            ),
+            MB_YESNO | MB_ICONQUESTION,
+        );
+        self.operation_in_progress = false;
+        if answer != IDYES {
+            return;
+        }
+
+        if let Err(error) = shell_open(&info.release_url) {
+            self.logger
+                .error(format!("无法打开 Launcher Release 页面：{error}"));
+            message_box(
+                &format!("无法打开 Launcher Release 页面：\r\n\r\n{error}"),
+                MB_OK | MB_ICONERROR,
+            );
         }
     }
 
@@ -515,7 +613,8 @@ impl App {
             COMMAND_OPEN => self.open_web_ui(),
             COMMAND_RESTART => self.begin_restart(true),
             COMMAND_LOG => self.open_current_log(),
-            COMMAND_UPDATE => self.begin_update_check(),
+            COMMAND_DSH_UPDATE => self.begin_dsh_update_check(),
+            COMMAND_LAUNCHER_UPDATE => self.begin_launcher_update_check(),
             COMMAND_EXIT => self.begin_exit(),
             _ => {}
         }
@@ -534,7 +633,18 @@ impl App {
         unsafe {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         }
-        let _ = append_menu(menu, COMMAND_UPDATE, &self.version_label, update_enabled);
+        let _ = append_menu(
+            menu,
+            COMMAND_DSH_UPDATE,
+            &self.dsh_version_label,
+            update_enabled,
+        );
+        let _ = append_menu(
+            menu,
+            COMMAND_LAUNCHER_UPDATE,
+            &self.launcher_version_label,
+            update_enabled,
+        );
         unsafe {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         }
@@ -720,10 +830,38 @@ fn trim_version(version: &str) -> &str {
         .trim_start_matches(|character| character == 'v' || character == 'V')
 }
 
-fn version_label(version: &str) -> String {
-    format!("v{} - 检查更新", trim_version(version))
+fn version_label(component: &str, version: &str) -> String {
+    format!("{component} 版本：v{} - 检查更新", trim_version(version))
+}
+
+fn unknown_version_label(component: &str) -> String {
+    format!("{component} 版本：未知 - 检查更新")
 }
 
 fn versions_equal(left: &str, right: &str) -> bool {
     trim_version(left).eq_ignore_ascii_case(trim_version(right))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{unknown_version_label, version_label, versions_equal};
+
+    #[test]
+    fn version_labels_identify_the_component() {
+        assert_eq!(
+            version_label("dsh", "v1.2.3"),
+            "dsh 版本：v1.2.3 - 检查更新"
+        );
+        assert_eq!(
+            version_label("Launcher", "0.2.0"),
+            "Launcher 版本：v0.2.0 - 检查更新"
+        );
+        assert_eq!(unknown_version_label("dsh"), "dsh 版本：未知 - 检查更新");
+    }
+
+    #[test]
+    fn version_comparison_ignores_v_prefix() {
+        assert!(versions_equal("v0.2.0", "0.2.0"));
+        assert!(!versions_equal("0.2.0", "0.2.1"));
+    }
 }

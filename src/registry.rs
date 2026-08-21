@@ -10,10 +10,24 @@ use windows::Win32::Networking::WinHttp::{
 
 const REGISTRY_HOST: &str = "registry.npmjs.org";
 const REGISTRY_PATH: &str = "/@deepseek-ai%2Fdsh/latest";
+const GITHUB_API_HOST: &str = "api.github.com";
+const GITHUB_LATEST_RELEASE_PATH: &str = "/repos/LiarCoder/DeepSeekHarnessLauncher/releases/latest";
 
 #[derive(Deserialize)]
 struct LatestPackage {
     version: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct LauncherRelease {
+    pub version: String,
+    pub page_url: String,
+}
+
+#[derive(Deserialize)]
+struct LatestRelease {
+    tag_name: String,
+    html_url: String,
 }
 
 pub fn latest_version() -> Result<String, String> {
@@ -27,8 +41,33 @@ pub fn latest_version() -> Result<String, String> {
     Ok(version.to_owned())
 }
 
+pub fn latest_launcher_release() -> Result<LauncherRelease, String> {
+    let body = get(GITHUB_API_HOST, GITHUB_LATEST_RELEASE_PATH)?;
+    parse_latest_launcher_release(&body)
+}
+
+fn parse_latest_launcher_release(body: &[u8]) -> Result<LauncherRelease, String> {
+    let release: LatestRelease = serde_json::from_slice(body)
+        .map_err(|error| format!("解析 GitHub Release 响应失败：{error}"))?;
+    let version = release.tag_name.trim();
+    if version.is_empty() {
+        return Err("GitHub Release 未返回 Launcher 版本号".to_owned());
+    }
+    let page_url = release.html_url.trim();
+    if page_url.is_empty() {
+        return Err("GitHub Release 未返回发布页地址".to_owned());
+    }
+    Ok(LauncherRelease {
+        version: version.to_owned(),
+        page_url: page_url.to_owned(),
+    })
+}
+
 fn get(host: &str, path: &str) -> Result<Vec<u8>, String> {
-    let agent = wide("DeepSeekHarnessLauncher/0.2");
+    let agent = wide(&format!(
+        "DeepSeekHarnessLauncher/{}",
+        env!("CARGO_PKG_VERSION")
+    ));
     let host = wide(host);
     let path = wide(path);
 
@@ -56,11 +95,11 @@ unsafe fn get_with_session(
     path: &[u16],
 ) -> Result<Vec<u8>, String> {
     WinHttpSetTimeouts(session, 5_000, 5_000, 10_000, 15_000)
-        .map_err(|error| format!("设置 registry 请求超时失败：{error}"))?;
+        .map_err(|error| format!("设置更新请求超时失败：{error}"))?;
 
     let connection = WinHttpConnect(session, PCWSTR(host.as_ptr()), 443, 0);
     if connection.is_null() {
-        return Err("无法连接 npm registry".to_owned());
+        return Err("无法连接更新服务".to_owned());
     }
 
     let request = WinHttpOpenRequest(
@@ -74,7 +113,7 @@ unsafe fn get_with_session(
     );
     if request.is_null() {
         let _ = WinHttpCloseHandle(connection);
-        return Err("无法创建 npm registry 请求".to_owned());
+        return Err("无法创建更新请求".to_owned());
     }
 
     let result = receive_response(request);
@@ -85,9 +124,9 @@ unsafe fn get_with_session(
 
 unsafe fn receive_response(request: *mut core::ffi::c_void) -> Result<Vec<u8>, String> {
     WinHttpSendRequest(request, None, None, 0, 0, 0)
-        .map_err(|error| format!("发送 npm registry 请求失败：{error}"))?;
+        .map_err(|error| format!("发送更新请求失败：{error}"))?;
     WinHttpReceiveResponse(request, null_mut())
-        .map_err(|error| format!("接收 npm registry 响应失败：{error}"))?;
+        .map_err(|error| format!("接收更新响应失败：{error}"))?;
 
     let mut status_code = 0u32;
     let mut status_size = core::mem::size_of::<u32>() as u32;
@@ -100,16 +139,16 @@ unsafe fn receive_response(request: *mut core::ffi::c_void) -> Result<Vec<u8>, S
         &mut status_size,
         &mut header_index,
     )
-    .map_err(|error| format!("读取 npm registry 状态失败：{error}"))?;
+    .map_err(|error| format!("读取更新服务状态失败：{error}"))?;
     if !(200..300).contains(&status_code) {
-        return Err(format!("npm registry 返回 HTTP {status_code}"));
+        return Err(format!("更新服务返回 HTTP {status_code}"));
     }
 
     let mut body = Vec::new();
     loop {
         let mut available = 0u32;
         WinHttpQueryDataAvailable(request, &mut available)
-            .map_err(|error| format!("读取 npm registry 响应长度失败：{error}"))?;
+            .map_err(|error| format!("读取更新响应长度失败：{error}"))?;
         if available == 0 {
             break;
         }
@@ -123,7 +162,7 @@ unsafe fn receive_response(request: *mut core::ffi::c_void) -> Result<Vec<u8>, S
             available,
             &mut read,
         )
-        .map_err(|error| format!("读取 npm registry 响应失败：{error}"))?;
+        .map_err(|error| format!("读取更新响应失败：{error}"))?;
         body.truncate(previous_len + read as usize);
         if read == 0 {
             break;
@@ -135,4 +174,35 @@ unsafe fn receive_response(request: *mut core::ffi::c_void) -> Result<Vec<u8>, S
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_latest_launcher_release;
+
+    #[test]
+    fn parses_github_latest_launcher_release() {
+        let release = parse_latest_launcher_release(
+            br#"{"tag_name":"v0.3.0","html_url":"https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/tag/v0.3.0"}"#,
+        )
+        .expect("parse release");
+
+        assert_eq!(release.version, "v0.3.0");
+        assert_eq!(
+            release.page_url,
+            "https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/tag/v0.3.0"
+        );
+    }
+
+    #[test]
+    fn rejects_release_without_version() {
+        let result = parse_latest_launcher_release(
+            br#"{"tag_name":"  ","html_url":"https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/latest"}"#,
+        );
+
+        assert_eq!(
+            result.expect_err("missing version should fail"),
+            "GitHub Release 未返回 Launcher 版本号"
+        );
+    }
 }

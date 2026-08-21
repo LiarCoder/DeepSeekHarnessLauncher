@@ -3,7 +3,7 @@ use crate::dsh;
 use std::io::{BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc::Sender, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,6 +20,7 @@ struct ProcessState {
     running: bool,
     ready: bool,
     stopping: bool,
+    startup_output: Vec<String>,
 }
 
 pub struct HarnessProcessManager {
@@ -37,6 +38,7 @@ impl HarnessProcessManager {
                 running: false,
                 ready: false,
                 stopping: false,
+                startup_output: Vec::new(),
             })),
             running: Arc::new(AtomicBool::new(false)),
             events,
@@ -52,9 +54,10 @@ impl HarnessProcessManager {
         }
 
         let port = find_available_port()?;
-        let dsh_command = dsh::locate()?;
         let args = vec!["web".to_owned(), "--port".to_owned(), port.to_string()];
-        let mut child = build_command(&dsh_command, &args)
+        let installation = dsh::locate_installation()?;
+        let (dsh_command, command_args) = dsh::command_for(&installation, &args);
+        let mut child = build_command(dsh_command, &command_args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -70,16 +73,29 @@ impl HarnessProcessManager {
             state.running = true;
             state.ready = false;
             state.stopping = false;
+            state.startup_output.clear();
         }
 
-        spawn_output_reader(child.stdout.take(), self.events.clone());
-        spawn_output_reader(child.stderr.take(), self.events.clone());
+        let active_readers = Arc::new(AtomicUsize::new(0));
+        spawn_output_reader(
+            child.stdout.take(),
+            self.events.clone(),
+            Arc::clone(&self.state),
+            Arc::clone(&active_readers),
+        );
+        spawn_output_reader(
+            child.stderr.take(),
+            self.events.clone(),
+            Arc::clone(&self.state),
+            Arc::clone(&active_readers),
+        );
         self.spawn_exit_monitor(child, process_id);
 
         let started_at = Instant::now();
         while started_at.elapsed() < timeout {
             if !self.running.load(Ordering::SeqCst) {
-                return Err("dsh 在服务就绪前退出".to_owned());
+                wait_for_output_readers(&active_readers);
+                return Err(self.startup_failure_message());
             }
             if TcpStream::connect(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)).is_ok() {
                 if let Ok(mut state) = self.state.lock() {
@@ -128,6 +144,15 @@ impl HarnessProcessManager {
         self.state.lock().ok()?.web_ui_url.clone()
     }
 
+    fn startup_failure_message(&self) -> String {
+        let output = self
+            .state
+            .lock()
+            .map(|state| state.startup_output.clone())
+            .unwrap_or_default();
+        summarize_startup_error(&output).unwrap_or_else(|| "dsh 在服务就绪前退出".to_owned())
+    }
+
     fn spawn_exit_monitor(&self, mut child: std::process::Child, monitored_process_id: u32) {
         let state = Arc::clone(&self.state);
         let running = Arc::clone(&self.running);
@@ -162,20 +187,65 @@ impl Drop for HarnessProcessManager {
     }
 }
 
-fn spawn_output_reader<R>(stream: Option<R>, events: Sender<ProcessEvent>)
-where
+fn spawn_output_reader<R>(
+    stream: Option<R>,
+    events: Sender<ProcessEvent>,
+    state: Arc<Mutex<ProcessState>>,
+    active_readers: Arc<AtomicUsize>,
+) where
     R: std::io::Read + Send + 'static,
 {
     let Some(stream) = stream else {
         return;
     };
+    active_readers.fetch_add(1, Ordering::SeqCst);
     thread::spawn(move || {
         for line in BufReader::new(stream).lines().map_while(Result::ok) {
             if !line.is_empty() {
+                if let Ok(mut state) = state.lock() {
+                    state.startup_output.push(line.clone());
+                    if state.startup_output.len() > 64 {
+                        state.startup_output.remove(0);
+                    }
+                }
                 let _ = events.send(ProcessEvent::Output(line));
             }
         }
+        active_readers.fetch_sub(1, Ordering::SeqCst);
     });
+}
+
+fn wait_for_output_readers(active_readers: &AtomicUsize) {
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while active_readers.load(Ordering::SeqCst) > 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn summarize_startup_error(output: &[String]) -> Option<String> {
+    output.iter().rev().find_map(|line| {
+        let line = line.trim();
+        let detail = ["TypeError:", "Error:", "error:"]
+            .iter()
+            .find_map(|marker| line.strip_prefix(marker).map(str::trim))?;
+        if detail.is_empty() {
+            return None;
+        }
+        Some(format!(
+            "dsh 在服务就绪前退出：{}",
+            truncate_detail(detail, 240)
+        ))
+    })
+}
+
+fn truncate_detail(detail: &str, max_chars: usize) -> String {
+    let mut chars = detail.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{truncated}…")
+    } else {
+        truncated
+    }
 }
 
 fn find_available_port() -> Result<u16, String> {
@@ -192,4 +262,34 @@ fn find_available_port() -> Result<u16, String> {
 
 fn can_bind(port: u16) -> bool {
     TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::summarize_startup_error;
+
+    #[test]
+    fn summarizes_the_useful_error_without_the_stack_trace() {
+        let output = vec![
+            "Error: dsh: plugin tree failed to load".to_owned(),
+            "TypeError: credentials-local: the value for \"version\" must be a string".to_owned(),
+            "    at parseCredentialsDocument (index.js:132:40)".to_owned(),
+        ];
+
+        assert_eq!(
+            summarize_startup_error(&output),
+            Some(
+                "dsh 在服务就绪前退出：credentials-local: the value for \"version\" must be a string"
+                    .to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn ignores_output_without_an_error_marker() {
+        assert_eq!(
+            summarize_startup_error(&["dsh web: starting".to_owned()]),
+            None
+        );
+    }
 }

@@ -115,6 +115,28 @@ impl PackageManager {
         Ok(combined.trim().to_owned())
     }
 
+    fn installed_version(&self) -> Result<String, String> {
+        if self.kind != PackageManagerKind::Volta {
+            return Err("当前包管理器不支持查询已安装版本".to_owned());
+        }
+
+        let output = run_capture(
+            &self.command,
+            &[
+                "list".into(),
+                "dsh".into(),
+                "--format".into(),
+                "plain".into(),
+            ],
+            Duration::from_secs(5),
+        )?;
+        if !output.status.success() {
+            return Err(format!("Volta 查询 dsh 版本失败：{}", output.stderr.trim()));
+        }
+        parse_volta_version(&output.stdout)
+            .ok_or_else(|| "Volta 未返回已安装的 dsh 版本号".to_owned())
+    }
+
     fn owns_dsh(&self, dsh: &ResolvedCommand) -> bool {
         match self.kind {
             PackageManagerKind::Volta => self.volta_owns_dsh(),
@@ -280,8 +302,33 @@ pub fn locate_installation() -> Result<DshInstallation, String> {
     Ok(DshInstallation { dsh, manager })
 }
 
-pub fn version(dsh: &ResolvedCommand) -> Result<String, String> {
-    let output = run_capture(dsh, &["--version".into()], Duration::from_secs(15))?;
+pub fn command_for<'a>(
+    installation: &'a DshInstallation,
+    args: &[String],
+) -> (&'a ResolvedCommand, Vec<String>) {
+    if installation.manager.kind == PackageManagerKind::Volta {
+        let mut command_args = vec!["run".into(), "dsh".into()];
+        command_args.extend_from_slice(args);
+        (&installation.manager.command, command_args)
+    } else {
+        (&installation.dsh, args.to_vec())
+    }
+}
+
+pub fn version(installation: &DshInstallation) -> Result<String, String> {
+    let (command, args) = command_for(installation, &["--version".into()]);
+    let direct_result = read_version(command, &args);
+    if direct_result.is_ok() {
+        return direct_result;
+    }
+    if let Ok(version) = installation.manager.installed_version() {
+        return Ok(version);
+    }
+    direct_result
+}
+
+fn read_version(command: &ResolvedCommand, args: &[String]) -> Result<String, String> {
+    let output = run_capture(command, args, Duration::from_secs(15))?;
     if !output.status.success() {
         return Err(format!("读取 dsh 版本失败：{}", output.stderr.trim()));
     }
@@ -311,6 +358,14 @@ fn output_path(output: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn parse_volta_version(output: &str) -> Option<String> {
+    let marker = format!("{PACKAGE_NAME}@");
+    output
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix(&marker).map(str::to_owned))
+        .filter(|version| !version.is_empty())
+}
+
 fn pnpm_global_bin(root: &Path) -> Option<PathBuf> {
     root.parent()?.parent()?.parent().map(Path::to_path_buf)
 }
@@ -337,7 +392,11 @@ fn normalize_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{output_path, PackageManagerKind};
+    use super::{
+        command_for, output_path, parse_volta_version, DshInstallation, PackageManager,
+        PackageManagerKind, ResolvedCommand,
+    };
+    use std::path::PathBuf;
 
     #[test]
     fn manager_update_commands_use_global_installation() {
@@ -356,11 +415,37 @@ mod tests {
     }
 
     #[test]
+    fn volta_runs_dsh_through_its_runtime() {
+        let installation = DshInstallation {
+            dsh: ResolvedCommand::new(PathBuf::from("dsh.cmd")),
+            manager: PackageManager {
+                kind: PackageManagerKind::Volta,
+                command: ResolvedCommand::new(PathBuf::from("volta.exe")),
+            },
+        };
+        let (command, args) = command_for(&installation, &["web".into(), "--port".into()]);
+
+        assert_eq!(command.path, PathBuf::from("volta.exe"));
+        assert_eq!(args, vec!["run", "dsh", "web", "--port"]);
+    }
+
+    #[test]
     fn package_manager_output_ignores_empty_lines() {
         assert_eq!(
             output_path("\r\nC:\\Users\\Liar\\.bun\\bin\r\n"),
             Some(std::path::PathBuf::from("C:\\Users\\Liar\\.bun\\bin"))
         );
         assert_eq!(output_path("undefined\r\n"), None);
+    }
+
+    #[test]
+    fn parses_volta_plain_package_version() {
+        assert_eq!(
+            parse_volta_version(
+                "tool dsh / @deepseek-ai/dsh@0.1.0-rc.7 / node@22.23.1 npm@built-in"
+            ),
+            Some("0.1.0-rc.7".to_owned())
+        );
+        assert_eq!(parse_volta_version("tool dsh / node@22.23.1"), None);
     }
 }
