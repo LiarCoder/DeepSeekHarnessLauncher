@@ -4,7 +4,7 @@ version = "0.3.0"
 edition = "2021"
 description = "Lightweight Windows tray launcher for a globally installed DeepSeek Harness"
 license = "MIT"
-repository = "https://github.com/LiarCoder/DeepSeekHarnessLauncher"
+repository = "https://github.com/LiarCoder/deepseek-harness-launcher"
 build = "build.rs"
 
 [dependencies]

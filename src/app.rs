@@ -132,7 +132,7 @@ impl App {
         let module = unsafe { GetModuleHandleW(None) }
             .map_err(|error| format!("读取程序模块失败：{error}"))?;
         self.instance = HINSTANCE(module.0);
-        let class_name = w!("DeepSeekHarnessLauncherWindow");
+        let class_name = w!("deepseek-harness-launcher-window");
         let class = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW,
