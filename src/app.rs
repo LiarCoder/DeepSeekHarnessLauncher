@@ -5,8 +5,10 @@ use crate::process::{HarnessProcessManager, ProcessEvent};
 use crate::registry;
 use crate::single_instance::SingleInstance;
 use crate::state;
+use crate::updater;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
@@ -50,6 +52,7 @@ enum WorkerEvent {
         latest_version: String,
     },
     LauncherUpdateCheckFinished(Result<LauncherUpdateInfo, String>),
+    LauncherUpdateDownloaded(Result<PathBuf, String>),
     RestartStopped {
         open_browser: bool,
     },
@@ -70,7 +73,7 @@ struct DshUpdateInfo {
 struct LauncherUpdateInfo {
     installed_version: String,
     latest_version: String,
-    release_url: String,
+    asset_url: String,
 }
 
 pub struct App {
@@ -229,6 +232,9 @@ impl App {
             } => self.handle_dsh_update_installed(result, &latest_version),
             WorkerEvent::LauncherUpdateCheckFinished(result) => {
                 self.handle_launcher_update_check_finished(result)
+            }
+            WorkerEvent::LauncherUpdateDownloaded(result) => {
+                self.handle_launcher_update_downloaded(result)
             }
             WorkerEvent::RestartStopped { open_browser } => {
                 if self.exiting {
@@ -497,7 +503,7 @@ impl App {
                 Ok(LauncherUpdateInfo {
                     installed_version: env!("CARGO_PKG_VERSION").to_owned(),
                     latest_version: release.version,
-                    release_url: release.page_url,
+                    asset_url: release.asset_url,
                 })
             })();
             let _ = sender.send(WorkerEvent::LauncherUpdateCheckFinished(result));
@@ -537,25 +543,69 @@ impl App {
 
         let answer = message_box_result(
             &format!(
-                "发现 Launcher 新版本：\r\n\r\n当前版本：v{}\r\n最新版本：v{}\r\n\r\n是否打开 GitHub Release 下载页面？",
+                "发现 Launcher 新版本：\r\n\r\n当前版本：v{}\r\n最新版本：v{}\r\n\r\n是否立即下载并重启 Launcher？",
                 trim_version(&info.installed_version),
                 trim_version(&info.latest_version)
             ),
             MB_YESNO | MB_ICONQUESTION,
         );
-        self.operation_in_progress = false;
         if answer != IDYES {
+            self.operation_in_progress = false;
             return;
         }
 
-        if let Err(error) = shell_open(&info.release_url) {
+        self.begin_launcher_download(info);
+    }
+
+    fn begin_launcher_download(&mut self, info: LauncherUpdateInfo) {
+        self.logger.info("正在下载 Launcher 更新");
+        let sender = self.worker_sender.clone();
+        let logger = Arc::clone(&self.logger);
+        thread::spawn(move || {
+            let result = (|| {
+                let bytes = registry::download_launcher_asset(&info.asset_url)?;
+                updater::save_download(&bytes)
+            })();
+            match &result {
+                Ok(_) => logger.info("Launcher 更新文件下载完成"),
+                Err(error) => logger.error(format!("下载 Launcher 更新失败：{error}")),
+            }
+            let _ = sender.send(WorkerEvent::LauncherUpdateDownloaded(result));
+        });
+    }
+
+    fn handle_launcher_update_downloaded(&mut self, result: Result<PathBuf, String>) {
+        let download_path = match result {
+            Ok(path) => path,
+            Err(error) => {
+                self.operation_in_progress = false;
+                message_box(
+                    &format!("下载或安装 Launcher 更新失败：\r\n\r\n{error}"),
+                    MB_OK | MB_ICONERROR,
+                );
+                return;
+            }
+        };
+
+        if let Err(error) = updater::install_and_restart(&download_path) {
+            let _ = std::fs::remove_file(&download_path);
+            self.operation_in_progress = false;
             self.logger
-                .error(format!("无法打开 Launcher Release 页面：{error}"));
+                .error(format!("安装 Launcher 更新失败：{error}"));
             message_box(
-                &format!("无法打开 Launcher Release 页面：\r\n\r\n{error}"),
+                &format!("下载或安装 Launcher 更新失败：\r\n\r\n{error}"),
                 MB_OK | MB_ICONERROR,
             );
+            return;
         }
+
+        self.operation_in_progress = false;
+        self.logger.info("Launcher 更新已准备完成，正在重启启动器");
+        message_box(
+            "Launcher 更新已下载，应用即将重启。",
+            MB_OK | MB_ICONINFORMATION,
+        );
+        self.begin_exit();
     }
 
     fn handle_unexpected_exit(&mut self) {

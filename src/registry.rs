@@ -12,6 +12,9 @@ const REGISTRY_HOST: &str = "registry.npmjs.org";
 const REGISTRY_PATH: &str = "/@deepseek-ai%2Fdsh/latest";
 const GITHUB_API_HOST: &str = "api.github.com";
 const GITHUB_LATEST_RELEASE_PATH: &str = "/repos/LiarCoder/DeepSeekHarnessLauncher/releases/latest";
+const GITHUB_RELEASE_ASSET_PREFIX: &str =
+    "https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/download/";
+const LAUNCHER_ASSET_NAME: &str = "deepseek-harness-launcher.exe";
 
 #[derive(Deserialize)]
 struct LatestPackage {
@@ -22,12 +25,21 @@ struct LatestPackage {
 pub struct LauncherRelease {
     pub version: String,
     pub page_url: String,
+    pub asset_url: String,
 }
 
 #[derive(Deserialize)]
 struct LatestRelease {
     tag_name: String,
     html_url: String,
+    #[serde(default)]
+    assets: Vec<ReleaseAsset>,
+}
+
+#[derive(Deserialize)]
+struct ReleaseAsset {
+    name: String,
+    browser_download_url: String,
 }
 
 pub fn latest_version() -> Result<String, String> {
@@ -57,10 +69,53 @@ fn parse_latest_launcher_release(body: &[u8]) -> Result<LauncherRelease, String>
     if page_url.is_empty() {
         return Err("GitHub Release 未返回发布页地址".to_owned());
     }
+    let asset = release
+        .assets
+        .iter()
+        .find(|asset| asset.name.trim().eq_ignore_ascii_case(LAUNCHER_ASSET_NAME))
+        .ok_or_else(|| "GitHub Release 未找到 Launcher Windows 安装包".to_owned())?;
+    let asset_url = asset.browser_download_url.trim();
+    if asset_url.is_empty() {
+        return Err("GitHub Release 未返回 Launcher 安装包地址".to_owned());
+    }
+    if !asset_url.starts_with(GITHUB_RELEASE_ASSET_PREFIX) {
+        return Err("GitHub Release Launcher 安装包地址无效".to_owned());
+    }
     Ok(LauncherRelease {
         version: version.to_owned(),
         page_url: page_url.to_owned(),
+        asset_url: asset_url.to_owned(),
     })
+}
+
+pub fn download_launcher_asset(asset_url: &str) -> Result<Vec<u8>, String> {
+    let (host, path) = split_https_url(asset_url)?;
+    if !host.eq_ignore_ascii_case("github.com")
+        || !path.starts_with("/LiarCoder/DeepSeekHarnessLauncher/releases/download/")
+    {
+        return Err("GitHub Release Launcher 安装包地址无效".to_owned());
+    }
+
+    let body = get(host, path)?;
+    if body.is_empty() {
+        return Err("GitHub Release Launcher 安装包为空".to_owned());
+    }
+    Ok(body)
+}
+
+fn split_https_url(url: &str) -> Result<(&str, &str), String> {
+    let remainder = url
+        .strip_prefix("https://")
+        .ok_or_else(|| "更新地址必须使用 HTTPS".to_owned())?;
+    let separator = remainder
+        .find('/')
+        .ok_or_else(|| "更新地址缺少请求路径".to_owned())?;
+    let host = &remainder[..separator];
+    let path = &remainder[separator..];
+    if host.is_empty() || path.len() <= 1 {
+        return Err("更新地址无效".to_owned());
+    }
+    Ok((host, path))
 }
 
 fn get(host: &str, path: &str) -> Result<Vec<u8>, String> {
@@ -178,12 +233,12 @@ fn wide(value: &str) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_latest_launcher_release;
+    use super::{parse_latest_launcher_release, split_https_url};
 
     #[test]
     fn parses_github_latest_launcher_release() {
         let release = parse_latest_launcher_release(
-            br#"{"tag_name":"v0.3.0","html_url":"https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/tag/v0.3.0"}"#,
+            br#"{"tag_name":"v0.3.0","html_url":"https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/tag/v0.3.0","assets":[{"name":"deepseek-harness-launcher.exe","browser_download_url":"https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/download/v0.3.0/deepseek-harness-launcher.exe"}]}"#,
         )
         .expect("parse release");
 
@@ -191,6 +246,10 @@ mod tests {
         assert_eq!(
             release.page_url,
             "https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/tag/v0.3.0"
+        );
+        assert_eq!(
+            release.asset_url,
+            "https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/download/v0.3.0/deepseek-harness-launcher.exe"
         );
     }
 
@@ -203,6 +262,32 @@ mod tests {
         assert_eq!(
             result.expect_err("missing version should fail"),
             "GitHub Release 未返回 Launcher 版本号"
+        );
+    }
+
+    #[test]
+    fn rejects_release_without_launcher_asset() {
+        let result = parse_latest_launcher_release(
+            br#"{"tag_name":"v0.3.0","html_url":"https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/tag/v0.3.0","assets":[]}"#,
+        );
+
+        assert_eq!(
+            result.expect_err("missing launcher asset should fail"),
+            "GitHub Release 未找到 Launcher Windows 安装包"
+        );
+    }
+
+    #[test]
+    fn splits_https_asset_url() {
+        assert_eq!(
+            split_https_url(
+                "https://github.com/LiarCoder/DeepSeekHarnessLauncher/releases/download/v0.3.0/deepseek-harness-launcher.exe"
+            )
+            .expect("split URL"),
+            (
+                "github.com",
+                "/LiarCoder/DeepSeekHarnessLauncher/releases/download/v0.3.0/deepseek-harness-launcher.exe"
+            )
         );
     }
 }

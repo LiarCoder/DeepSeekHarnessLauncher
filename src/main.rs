@@ -10,6 +10,7 @@ mod process;
 mod registry;
 mod single_instance;
 mod state;
+mod updater;
 
 fn main() {
     let single_instance = match single_instance::SingleInstance::acquire() {
