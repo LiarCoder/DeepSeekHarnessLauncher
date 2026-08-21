@@ -12,8 +12,12 @@ use windows::Win32::UI::Accessibility::{
     TreeScope_Children, TreeScope_Descendants, UIA_EditControlTypeId, UIA_SelectionItemPatternId,
     UIA_TabItemControlTypeId, UIA_ValuePatternId,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+    VK_CONTROL, VK_SHIFT, VK_TAB,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    GetForegroundWindow, GetWindowTextW, IsIconic, SetForegroundWindow, ShowWindow, SW_RESTORE,
 };
 
 const WEB_UI_TITLE: &str = "DeepSeek Harness";
@@ -41,7 +45,9 @@ unsafe fn activate_with_automation(web_ui_url: &str) -> Result<bool> {
     let condition = automation.CreateTrueCondition()?;
     let windows = root.FindAll(TreeScope_Children, &condition)?;
 
-    for window in elements(&windows)? {
+    let windows = elements(&windows)?;
+
+    for window in &windows {
         let class_name = current_string(&window.CurrentClassName()?).unwrap_or_default();
         if !is_browser_window(&class_name) {
             continue;
@@ -80,7 +86,97 @@ unsafe fn activate_with_automation(web_ui_url: &str) -> Result<bool> {
         }
     }
 
+    for window in &windows {
+        let class_name = current_string(&window.CurrentClassName()?).unwrap_or_default();
+        if class_name != "Chrome_WidgetWin_1" {
+            continue;
+        }
+
+        let handle = window.CurrentNativeWindowHandle()?;
+        if handle.0.is_null() || activate_window(window).is_err() {
+            continue;
+        }
+        thread::sleep(Duration::from_millis(50));
+        if unsafe { GetForegroundWindow().0 != handle.0 } {
+            continue;
+        }
+
+        if try_activate_with_tab_cycle(handle) {
+            return Ok(true);
+        }
+    }
+
     Ok(false)
+}
+
+fn try_activate_with_tab_cycle(window: windows::Win32::Foundation::HWND) -> bool {
+    const MAX_TAB_CYCLE_STEPS: usize = 32;
+    let initial_title = window_title(window);
+    if initial_title.is_empty() {
+        return false;
+    }
+
+    for _ in 0..MAX_TAB_CYCLE_STEPS {
+        if !send_key_chord(&[VK_CONTROL, VK_TAB]) {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(50));
+
+        let title = window_title(window);
+        if is_web_ui_title(&title) {
+            return true;
+        }
+        if title == initial_title {
+            return false;
+        }
+    }
+
+    for _ in 0..MAX_TAB_CYCLE_STEPS {
+        if !send_key_chord(&[VK_CONTROL, VK_SHIFT, VK_TAB]) {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+
+fn send_key_chord(keys: &[VIRTUAL_KEY]) -> bool {
+    let mut inputs = Vec::with_capacity(keys.len() * 2);
+    for &key in keys {
+        inputs.push(keyboard_input(key, Default::default()));
+    }
+    for &key in keys.iter().rev() {
+        inputs.push(keyboard_input(key, KEYEVENTF_KEYUP));
+    }
+    send_inputs(&inputs)
+}
+
+fn keyboard_input(
+    key: VIRTUAL_KEY,
+    flags: windows::Win32::UI::Input::KeyboardAndMouse::KEYBD_EVENT_FLAGS,
+) -> INPUT {
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: key,
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
+}
+
+fn send_inputs(inputs: &[INPUT]) -> bool {
+    unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) == inputs.len() as u32 }
+}
+
+fn window_title(window: windows::Win32::Foundation::HWND) -> String {
+    let mut title = [0u16; 512];
+    let length = unsafe { GetWindowTextW(window, &mut title) };
+    String::from_utf16_lossy(&title[..length.max(0) as usize])
 }
 
 unsafe fn elements(array: &IUIAutomationElementArray) -> Result<Vec<IUIAutomationElement>> {
@@ -217,7 +313,7 @@ fn default_port(scheme: &str) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::same_origin;
+    use super::{is_web_ui_title, same_origin};
 
     #[test]
     fn browser_address_matches_web_ui_origin() {
@@ -230,5 +326,11 @@ mod tests {
             "http://127.0.0.1:3081/",
             "http://127.0.0.1:3080/"
         ));
+    }
+
+    #[test]
+    fn browser_window_title_matches_web_ui() {
+        assert!(is_web_ui_title("DeepSeek Harness - Cent Browser"));
+        assert!(!is_web_ui_title("New Tab - Cent Browser"));
     }
 }
