@@ -338,7 +338,7 @@ impl App {
         thread::spawn(move || {
             let result = (|| {
                 let installation = dsh::locate_installation()?;
-                let version = dsh::version(&installation.dsh)?;
+                let version = dsh::version(&installation)?;
                 Ok(VersionInfo {
                     version,
                     manager_name: installation.manager.display_name(),
@@ -372,7 +372,7 @@ impl App {
         thread::spawn(move || {
             let result = (|| {
                 let installation: DshInstallation = dsh::locate_installation()?;
-                let installed_version = dsh::version(&installation.dsh)?;
+                let installed_version = dsh::version(&installation)?;
                 let latest_version = registry::latest_version()?;
                 Ok(DshUpdateInfo {
                     installed_version,
@@ -428,6 +428,8 @@ impl App {
     }
 
     fn begin_dsh_install(&mut self, info: DshUpdateInfo) {
+        self.logger.info("正在停止 DeepSeek Harness 以安装更新");
+        let harness = Arc::clone(&self.harness);
         self.logger.info(format!(
             "使用 {} 更新 DeepSeek Harness",
             info.manager.display_name()
@@ -436,6 +438,8 @@ impl App {
         let logger = Arc::clone(&self.logger);
         let latest_version = info.latest_version.clone();
         thread::spawn(move || {
+            harness.stop();
+            state::clear();
             let result = info.manager.run_update(Duration::from_secs(300));
             if let Ok(output) = &result {
                 if !output.is_empty() {
@@ -465,16 +469,17 @@ impl App {
                     ),
                     MB_OK | MB_ICONINFORMATION,
                 );
-                self.begin_restart(true);
+                self.begin_start(true, true);
             }
             Err(error) => {
                 self.operation_in_progress = false;
                 self.logger
                     .error(format!("安装 DeepSeek Harness 更新失败：{error}"));
                 message_box(
-                    &format!("检查或安装更新失败，当前 Harness 将继续运行：\r\n\r\n{error}"),
+                    &format!("检查或安装更新失败，正在尝试重新启动 Harness：\r\n\r\n{error}"),
                     MB_OK | MB_ICONERROR,
                 );
+                self.begin_start(true, true);
             }
         }
     }
