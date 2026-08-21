@@ -8,7 +8,7 @@
 - 优先使用 `3080`，端口冲突时自动选择空闲端口
 - 从托盘打开 Web UI、重启 Harness、查看日志，并分别检查 dsh 与 Launcher 更新
 - 检查更新前识别 `dsh` 的实际安装来源，并使用同一个全局包管理器更新
-- Launcher 更新信息从 GitHub Releases 获取，发现新版本时可打开对应发布页下载
+- Launcher 更新信息从 GitHub Releases 获取，发现新版本时自动下载、替换并重启启动器
 - Harness 异常退出后自动重启一次
 - 退出启动器时终止 Harness 进程树
 - 日志与运行状态保存在 `~\.dsh\dsh-launcher`
